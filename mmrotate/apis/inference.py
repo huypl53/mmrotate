@@ -9,6 +9,8 @@ from mmdet.datasets.pipelines import Compose
 
 from mmrotate.core import get_multiscale_patch, merge_results, slide_window
 
+RATIO_THRESH = 1.5
+
 
 def inference_detector_by_patches(model,
                                   img,
@@ -16,7 +18,8 @@ def inference_detector_by_patches(model,
                                   steps,
                                   ratios,
                                   merge_iou_thr,
-                                  bs=1):
+                                  bs=1,
+                                  wh_rate=RATIO_THRESH):
     """inference patches with the detector.
 
     Split huge image(s) into patches and inference them with the detector.
@@ -79,12 +82,27 @@ def inference_detector_by_patches(model,
 
         # forward the model
         with torch.no_grad():
+            # each element is a list detection of a patch
+            # (Pdb) p results[0]
+            # [array([], shape=(0, 6), dtype=float32)]
             results.extend(model(return_loss=False, rescale=True, **data))
+
+            # an example of an detection for one cls: 
+            # array([[ 2.0036e+03,  1.5468e+03,  1.0568e+02,  4.5846e+01, -3.7649e-01,  9.9884e-01]], dtype=float32)
 
         if end >= len(windows):
             break
         start += bs
 
+    def _filter_by_ratio(bboxes, thresh=wh_rate):
+        if (not bboxes.any()):
+            return bboxes
+        filtered_bboxes = (bboxes[:, 3] - bboxes[:, 1]) / (bboxes[:, 2] - bboxes[:, 0])
+        filtered_idx = np.where( ( filtered_bboxes > thresh ) | ( filtered_bboxes < 1/thresh ) )
+        return bboxes[filtered_idx]
+
+
+    results = [ [_filter_by_ratio( cls_result ) for cls_result in patch_result] for patch_result in results ] if wh_rate else results
     results = merge_results(
         results,
         windows[:, :2],
